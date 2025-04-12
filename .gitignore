@@ -12,6 +12,7 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+coverage/
 
 # Flask / Python
 __pycache__/
@@ -97,6 +98,6 @@ bower_components/
 # Optional REPL history
 .node_repl_history
 
-# Package locks (include package-lock.json but exclude yarn.lock)
-# yarn.lock
-# package-lock.json
+# Production bundle
+/test-voice/build/
+/Bitcamp25/test-voice/build/
