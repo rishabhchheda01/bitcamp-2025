@@ -1,4 +1,6 @@
 requests
 flask
 flask_cors
+gunicorn
 retell-sdk
+Werkzeug
