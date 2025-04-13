@@ -1,0 +1,8 @@
+az webapp up --runtime PYTHON:3.12 --sku B1 --name retell-custom-functions-api-2
+az webapp up --runtime PYTHON:3.12 --sku B1 --name nova
+
+
+
+az webapp log tail --name retell-custom-functions-api-2 --resource-group rchheda_rg_2525
+
+

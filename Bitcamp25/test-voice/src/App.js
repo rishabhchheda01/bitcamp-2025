@@ -21,7 +21,7 @@ function App() {
   const AGENT_ID = "agent_30b1b504a89d37e3109a7da3e9";
   
   // Server endpoint for token generation
-  const TOKEN_SERVER_URL = "http://127.0.0.1:5000/api/generate-token";
+  const TOKEN_SERVER_URL = "https://retell-custom-functions-api-2.azurewebsites.net/api/generate-token";
 
   useEffect(() => {
     // Initialize the RetellWebClient

@@ -1,0 +1,6 @@
+Flask==3.1.0
+requests
+flask_cors
+gunicorn
+retell-sdk
+Werkzeug
