@@ -3,9 +3,23 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/face_detection": "^0.4.1646425229",
+    "@mediapipe/face_mesh": "^0.4.1633559619",
+    "@splinetool/react-spline": "^4.0.0",
+    "@splinetool/runtime": "^1.9.82",
+    "@tensorflow-models/face-landmarks-detection": "^1.0.6",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
+    "face-api.js": "^0.22.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-router-dom": "^6.15.0",
     "react-scripts": "^5.0.1",
+    "react-speech-recognition": "^4.0.0",
+    "react-use-face-detection": "^1.0.2",
+    "react-webcam": "^7.2.0",
     "retell-client-js-sdk": "^2.0.7"
   },
   "scripts": {
@@ -25,5 +39,8 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "eslint-plugin-react-hooks": "^5.2.0"
   }
 }

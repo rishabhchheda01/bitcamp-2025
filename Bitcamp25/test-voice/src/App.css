@@ -1,0 +1,174 @@
+/* Graph Styling */
+.graph-container {
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 10px;
+  padding: 20px;
+  margin: 20px 0;
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+  max-width: 800px;
+  width: 100%;
+}
+
+.graph-title {
+  color: #00f2fe;
+  text-align: center;
+  margin-bottom: 20px;
+  font-size: 1.5rem;
+  font-weight: bold;
+  text-shadow: 0 0 5px rgba(0, 242, 254, 0.7);
+}
+
+.neon-graph {
+  display: flex;
+  height: 300px;
+  position: relative;
+  margin-bottom: 20px;
+}
+
+.y-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  color: #4facfe;
+  margin-right: 10px;
+  font-size: 0.8rem;
+}
+
+.bar-container {
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-end;
+  width: 100%;
+  height: 100%;
+  border-left: 1px solid #4facfe;
+  border-bottom: 1px solid #4facfe;
+  padding-left: 10px;
+  padding-bottom: 20px;
+}
+
+.bar {
+  width: 40px;
+  background: linear-gradient(to top, #4facfe, #00f2fe);
+  margin: 0 10px;
+  position: relative;
+  border-radius: 5px 5px 0 0;
+  transition: height 0.5s ease;
+  animation: pulse 2s infinite;
+}
+
+.bar-glow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 5px 5px 0 0;
+  box-shadow: 0 0 10px rgba(0, 242, 254, 0.7);
+  opacity: 0.7;
+}
+
+.bar:hover {
+  background: linear-gradient(to top, #4facfe, #00f2fe);
+  box-shadow: 0 0 15px rgba(0, 242, 254, 1);
+  transform: translateY(-5px);
+}
+
+.bar-label {
+  position: absolute;
+  bottom: -25px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #4facfe;
+  font-weight: bold;
+}
+
+.bar-value {
+  position: absolute;
+  top: -25px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #4facfe;
+  font-weight: bold;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.bar:hover .bar-value {
+  opacity: 1;
+}
+
+.animated-line {
+  width: 100%;
+  height: 100%;
+  border-left: 1px solid #4facfe;
+  border-bottom: 1px solid #4facfe;
+  padding-left: 10px;
+  padding-bottom: 20px;
+}
+
+.data-point {
+  fill: #00f2fe;
+  transition: r 0.3s;
+}
+
+.data-point.pulse {
+  animation: pulse 2s infinite;
+}
+
+.data-label {
+  fill: #4facfe;
+  font-size: 0.6rem;
+  text-anchor: middle;
+}
+
+.x-axis-label {
+  color: #4facfe;
+  text-align: center;
+  margin-top: 10px;
+  font-size: 0.9rem;
+}
+
+.graph-legend {
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin: 0 10px;
+  color: #4facfe;
+}
+
+.legend-color {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+
+.bar-color {
+  background: linear-gradient(45deg, #4facfe, #00f2fe);
+  box-shadow: 0 0 5px rgba(0, 242, 254, 0.7);
+}
+
+.line-color {
+  background: linear-gradient(45deg, #4facfe, #00f2fe);
+  box-shadow: 0 0 5px rgba(0, 242, 254, 0.7);
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 5px rgba(0, 242, 254, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(0, 242, 254, 1);
+  }
+  100% {
+    box-shadow: 0 0 5px rgba(0, 242, 254, 0.7);
+  }
+}
+
+/* End Graph Styling */ 

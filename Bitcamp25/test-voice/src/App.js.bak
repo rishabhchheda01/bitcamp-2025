@@ -1,0 +1,1686 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { RetellWebClient } from "retell-client-js-sdk";
+import SplineLoader from './SplineLoader';
+import SplineViewer from './SplineViewer';
+import './index.css';
+import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
+import agentIcon from './assets/agent-icon.svg';
+import userIcon from './assets/user-icon.svg';
+// Import face detection components
+import "@tensorflow/tfjs";
+import "@tensorflow/tfjs-backend-webgl";
+import "@mediapipe/face_mesh";
+import Webcam from "react-webcam";
+import FaceDirectionDetector from "./face_detection/FaceDirectionDetector";
+
+function App() {
+  // Add a ref to maintain the Spline instance
+  const splineInstanceRef = useRef(null);
+  const [isCallActive, setIsCallActive] = useState(false);
+  const [retellWebClient, setRetellWebClient] = useState(null);
+  const [eventStatus, setEventStatus] = useState({
+    callStarted: false,
+    callEnded: false,
+    agentStartTalking: false,
+    agentStopTalking: false,
+    error: null,
+    transcript: ''
+  });
+  const [micPermission, setMicPermission] = useState(null);
+  const [accessToken, setAccessToken] = useState('');
+  const [isGeneratingToken, setIsGeneratingToken] = useState(false);
+  const [callInfo, setCallInfo] = useState(null);
+  const [loadingComplete, setLoadingComplete] = useState(false);
+  const [showUI, setShowUI] = useState(true);
+  // Add state to control the mounting/unmounting of Spline
+  const [splineInitialized, setSplineInitialized] = useState(false);
+  // Add refs for animation control
+  const animationTimerRef = useRef(null);
+  const lastKeyPressRef = useRef(null);
+  // Track if key is being pressed
+  const keyPressedRef = useRef({});
+  // State for graph visualization
+  const [showGraphs, setShowGraphs] = useState(false);
+  const [graphType, setGraphType] = useState('bar'); // 'bar', 'line', 'pie', 'scatter'
+  const graphTimerRef = useRef(null);
+  const [messages, setMessages] = useState([]);
+  const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const graphKeywords = ['graph', 'chart', 'stats', 'data', 'visualization', 'metrics', 'numbers'];
+  const graphIntervalRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  // State to track if graphs have been animated
+  const [graphsAnimated, setGraphsAnimated] = useState(false);
+  // State to track if graphs were manually dismissed
+  const [graphsManuallyDismissed, setGraphsManuallyDismissed] = useState(false);
+  // State for active tab (voice, finance, connect)
+  const [activeTab, setActiveTab] = useState('voice');
+  // State for face detection
+  const [faceDetectionEnabled, setFaceDetectionEnabled] = useState(false);
+  const [facePosition, setFacePosition] = useState({ x: 0, y: 0, direction: null });
+  const webcamRef = useRef(null);
+  const canvasRef = useRef(null);
+  const detectorRef = useRef(null);
+  const [faceDetectionLoaded, setFaceDetectionLoaded] = useState(false);
+
+  const {
+    transcript: currentTranscript,
+    listening,
+    resetTranscript,
+    browserSupportsSpeechRecognition
+  } = useSpeechRecognition();
+
+  // Key press duration in milliseconds (1 second)
+  const KEY_PRESS_DURATION = 1000; 
+
+  // Agent ID for Retell
+  const AGENT_ID = "agent_9472fc0c61886098d4a311f2a8";
+  
+  // Server endpoint for token generation
+  const TOKEN_SERVER_URL = "http://127.0.0.1:5000/api/generate-token";
+
+  // Function to check if the transcript contains data visualization keywords
+  const checkForGraphKeywords = (transcript) => {
+    if (!transcript) return false;
+    
+    const lowerText = transcript.toLowerCase();
+    return (
+      lowerText.includes('chart') || 
+      lowerText.includes('graph') || 
+      lowerText.includes('stats') ||
+      lowerText.includes('statistics') ||
+      lowerText.includes('visualization') ||
+      lowerText.includes('plot') ||
+      lowerText.includes('diagram')
+    );
+  };
+  
+  // Function to handle graph visualization
+  const handleGraphVisualization = (transcript) => {
+    // Don't show graphs if they were manually dismissed
+    if (graphsManuallyDismissed) return;
+    
+    const shouldShowGraphs = checkForGraphKeywords(transcript);
+    
+    if (shouldShowGraphs && !showGraphs) {
+      // Show graphs when keywords are detected
+      setShowGraphs(true);
+      
+      // Randomly select a graph type to display
+      const graphTypes = ['bar', 'line', 'pie', 'scatter'];
+      const randomType = graphTypes[Math.floor(Math.random() * graphTypes.length)];
+      setGraphType(randomType);
+      
+      // Cycle through graph types while keywords are present
+      if (graphTimerRef.current) {
+        clearInterval(graphTimerRef.current);
+      }
+      
+      graphTimerRef.current = setInterval(() => {
+        setGraphType(prevType => {
+          const nextIndex = (graphTypes.indexOf(prevType) + 1) % graphTypes.length;
+          return graphTypes[nextIndex];
+        });
+      }, 3000); // Change graph type every 3 seconds
+    }
+    // Removed the code that automatically hides graphs - they'll only be dismissed by the button
+  };
+
+  // Enhanced function to simulate a keyboard press with multiple methods
+  const simulateKeyPress = (key, isContinuous = false) => {
+    // Skip the check for repeated presses if this is a continuous press
+    if (!isContinuous && keyPressedRef.current[key]) return;
+    
+    // Only set the keyPressed flag if not continuous
+    if (!isContinuous) {
+      keyPressedRef.current[key] = true;
+    }
+    
+    // Method 1: Use our custom SplineViewer reference method if available
+    if (splineInstanceRef.current) {
+      try {
+        // Send keydown event
+        splineInstanceRef.current.sendKeyDown(key);
+        console.log(`Sent keydown to Spline via ref: ${key}`);
+        
+        // Schedule keyup after KEY_PRESS_DURATION, but only if not continuous
+        if (!isContinuous) {
+          setTimeout(() => {
+            splineInstanceRef.current.sendKeyUp(key);
+            console.log(`Sent keyup to Spline via ref: ${key}`);
+          }, KEY_PRESS_DURATION);
+        }
+      } catch (e) {
+        console.error("Error using splineInstanceRef sendKey:", e);
+      }
+    }
+    
+    // Method 2: Try to dispatch to active element (sometimes this works better)
+    try {
+      if (document.activeElement) {
+        const event = new KeyboardEvent('keydown', {
+          key: key,
+          code: `Key${key.toUpperCase()}`,
+          keyCode: key.charCodeAt(0),
+          which: key.charCodeAt(0),
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        });
+        document.activeElement.dispatchEvent(event);
+        
+        // Schedule keyup after KEY_PRESS_DURATION
+        setTimeout(() => {
+          const upEvent = new KeyboardEvent('keyup', {
+            key: key,
+            code: `Key${key.toUpperCase()}`,
+            keyCode: key.charCodeAt(0),
+            which: key.charCodeAt(0),
+            bubbles: true,
+            cancelable: true,
+            composed: true
+          });
+          document.activeElement.dispatchEvent(upEvent);
+        }, KEY_PRESS_DURATION);
+      }
+    } catch (e) {
+      console.error("Error dispatching to active element:", e);
+    }
+    
+    // Method 3: Manually activate the test buttons through DOM
+    try {
+      // Create a mouse click event on the corresponding test button
+      const buttonSelector = key === 'u' ? '.test-btn:nth-child(1)' : 
+                             key === 'd' ? '.test-btn:nth-child(2)' : 
+                             key === 'l' ? '.test-btn:nth-child(3)' : 
+                             '.test-btn:nth-child(4)';
+                             
+      const button = document.querySelector(buttonSelector);
+      if (button) {
+        // Add active state with CSS
+        button.classList.add('active-test-btn');
+        
+        // Remove active state after KEY_PRESS_DURATION
+        setTimeout(() => {
+          button.classList.remove('active-test-btn');
+        }, KEY_PRESS_DURATION);
+      }
+    } catch (e) {
+      console.error("Error activating test button:", e);
+    }
+    
+    // Method 4: Try to locate and interact directly with the Spline iframe
+    try {
+      const splineContainer = document.querySelector('.spline-container');
+      if (splineContainer) {
+        const iframe = splineContainer.querySelector('iframe');
+        if (iframe) {
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+          
+          // Try to find body or canvas element
+          const target = iframeDoc.querySelector('canvas') || iframeDoc.body || iframeDoc;
+          if (target) {
+            const event = new KeyboardEvent('keydown', {
+              key: key,
+              code: `Key${key.toUpperCase()}`,
+              keyCode: key.charCodeAt(0),
+              which: key.charCodeAt(0),
+              bubbles: true,
+              cancelable: true
+            });
+            target.dispatchEvent(event);
+            
+            // Schedule keyup after KEY_PRESS_DURATION
+            setTimeout(() => {
+              const upEvent = new KeyboardEvent('keyup', {
+                key: key,
+                code: `Key${key.toUpperCase()}`,
+                keyCode: key.charCodeAt(0),
+                which: key.charCodeAt(0),
+                bubbles: true,
+                cancelable: true
+              });
+              target.dispatchEvent(upEvent);
+            }, KEY_PRESS_DURATION);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Error dispatching directly to iframe content:", e);
+    }
+    
+    // Store the last key press
+    lastKeyPressRef.current = key;
+    
+    // Reset pressed state after KEY_PRESS_DURATION plus a small buffer, but only if not continuous
+    if (!isContinuous) {
+      setTimeout(() => {
+        keyPressedRef.current[key] = false;
+      }, KEY_PRESS_DURATION + 100);
+    }
+  };
+
+  // Function to handle actual keyboard events (for testing purposes)
+  const handleKeyDown = (e) => {
+    // We'll only log and process the keys we're interested in
+    if (['u', 'd', 'l', 'r'].includes(e.key)) {
+      console.log(`Actual key press: ${e.key}`);
+      
+      // We should also manually trigger the same spline animation for consistent behavior
+      if (!keyPressedRef.current[e.key]) {
+        testAnimation(e.key);
+      }
+    }
+  };
+
+  // Add a hook to listen for real keyboard events for debugging
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  // Function to start animation based on talking state
+  const startTalkingAnimation = () => {
+    // Clear any existing animation timer
+    if (animationTimerRef.current) {
+      clearInterval(animationTimerRef.current);
+    }
+    
+    // Reset the last key press to force starting with up movement
+    lastKeyPressRef.current = null;
+    
+    // Start with an initial up key press to ensure we begin with up/down
+    simulateKeyPress('u');
+    
+    // Track the previous negation state
+    let wasNegation = false;
+    
+    // Set up a new animation timer to simulate key presses while talking
+    // Use a longer interval to account for the longer key press duration
+    animationTimerRef.current = setInterval(() => {
+      // Check if the transcript contains negation words
+      const hasNegation = eventStatus.transcript && (
+        eventStatus.transcript.toLowerCase().includes('no') || 
+        eventStatus.transcript.toLowerCase().includes('not') ||
+        eventStatus.transcript.toLowerCase().includes("don't") ||
+        eventStatus.transcript.toLowerCase().includes("doesn't")
+      );
+      
+      // If negation state changed from true to false, reset the animation pattern
+      if (wasNegation && !hasNegation) {
+        console.log("Negation ended, resetting to up/down movement");
+        lastKeyPressRef.current = null;
+        simulateKeyPress('u');
+      }
+      
+      // Update the previous negation state
+      wasNegation = hasNegation;
+      
+      // If there's negation, use left-right movements
+      if (hasNegation) {
+        // Alternate between left and right
+        if (lastKeyPressRef.current === 'l') {
+          simulateKeyPress('r');
+        } else {
+          simulateKeyPress('l');
+        }
+      } else {
+        // Otherwise use up-down movements
+        if (lastKeyPressRef.current === 'u') {
+          simulateKeyPress('d');
+        } else {
+          simulateKeyPress('u');
+        }
+      }
+    }, KEY_PRESS_DURATION + 200); // Animation interval is longer to account for key press duration
+  };
+  
+  // Function to stop animation
+  const stopTalkingAnimation = () => {
+    if (animationTimerRef.current) {
+      clearInterval(animationTimerRef.current);
+      animationTimerRef.current = null;
+    }
+  };
+
+  // Function to manually trigger animation for testing 
+  const testAnimation = (direction) => {
+    simulateKeyPress(direction);
+  };
+
+  // Effect to update graph visualization when transcript changes
+  useEffect(() => {
+    if (eventStatus.transcript) {
+      handleGraphVisualization(eventStatus.transcript);
+    }
+  }, [eventStatus.transcript, eventStatus.agentStartTalking]);
+  
+  // Clean up graph timer on component unmount
+  useEffect(() => {
+    return () => {
+      if (graphTimerRef.current) {
+        clearInterval(graphTimerRef.current);
+        graphTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // Initialize the RetellWebClient
+    const client = new RetellWebClient();
+    setRetellWebClient(client);
+    
+    // Check for microphone permissions
+    checkMicrophonePermission();
+    
+    // Set up event listeners
+    client.on("call_started", () => {
+      console.log("call started");
+      setEventStatus(prev => ({ ...prev, callStarted: true, callEnded: false }));
+    });
+
+    client.on("call_ended", () => {
+      console.log("call ended");
+      setIsCallActive(false);
+      setEventStatus(prev => ({ ...prev, callEnded: true }));
+      stopTalkingAnimation();
+      // Reset the manual dismissal flag when call ends
+      setGraphsManuallyDismissed(false);
+    });
+
+    client.on("agent_start_talking", () => {
+      console.log("agent_start_talking");
+      setEventStatus(prev => ({ ...prev, agentStartTalking: true, agentStopTalking: false }));
+      startTalkingAnimation();
+    });
+
+    client.on("agent_stop_talking", () => {
+      console.log("agent_stop_talking");
+      setEventStatus(prev => ({ ...prev, agentStopTalking: true, agentStartTalking: false }));
+      stopTalkingAnimation();
+    });
+
+    client.on("update", (update) => {
+      console.log("Update received:", update);
+      if (update.transcript) {
+        // Check if transcript is an object with role and content properties
+        if (typeof update.transcript === 'object' && update.transcript.role && update.transcript.content) {
+          // Extract the content text
+          setEventStatus(prev => ({ ...prev, transcript: update.transcript.content }));
+        } 
+        // Check if transcript is an array of message objects
+        else if (Array.isArray(update.transcript)) {
+          // Map through messages and format them
+          const formattedTranscript = update.transcript
+            .map(msg => {
+              if (typeof msg === 'object' && msg.role && msg.content) {
+                return `${msg.role}: ${msg.content}`;
+              }
+              return String(msg); // Convert to string if it's some other type
+            })
+            .join('\n');
+          setEventStatus(prev => ({ ...prev, transcript: formattedTranscript }));
+        } 
+        // If it's a string or can be converted to string
+        else {
+          setEventStatus(prev => ({ ...prev, transcript: String(update.transcript) }));
+        }
+      }
+    });
+
+    client.on("metadata", (metadata) => {
+      console.log("Metadata received:", metadata);
+    });
+
+    client.on("error", (error) => {
+      console.error("An error occurred:", error);
+      setEventStatus(prev => ({ ...prev, error: error.message || "Unknown error" }));
+      client.stopCall();
+      stopTalkingAnimation();
+    });
+    
+    // Clean up event listeners and animation on component unmount
+    return () => {
+      stopTalkingAnimation();
+      if (client) {
+        client.stopCall();
+      }
+    };
+  }, []);
+
+  // Effect to handle animation when talking state changes
+  useEffect(() => {
+    if (eventStatus.agentStartTalking && !eventStatus.agentStopTalking) {
+      startTalkingAnimation();
+    } else {
+      stopTalkingAnimation();
+    }
+  }, [eventStatus.agentStartTalking, eventStatus.agentStopTalking]);
+  
+  // Function to generate an access token from the server
+  const generateAccessToken = async () => {
+    try {
+      setIsGeneratingToken(true);
+      setEventStatus(prev => ({ ...prev, error: null }));
+      console.log("Requesting access token from server...");
+      
+      // Make the API call to our server endpoint
+      const response = await fetch(TOKEN_SERVER_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          agent_id: AGENT_ID,
+        })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Server responded with status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (!data.access_token) {
+        throw new Error("No access token received from server");
+      }
+      
+      console.log("Access token received from server:", data.access_token);
+      setAccessToken(data.access_token);
+      setCallInfo(data); // Store the full call info for reference
+      setIsGeneratingToken(false);
+      
+      return data.access_token;
+    } catch (error) {
+      console.error("Failed to generate access token:", error);
+      setEventStatus(prev => ({ ...prev, error: error.message || "Failed to generate access token" }));
+      setIsGeneratingToken(false);
+      return null;
+    }
+  };
+  
+  const checkMicrophonePermission = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setMicPermission('granted');
+      // Stop the stream tracks immediately
+      stream.getTracks().forEach(track => track.stop());
+    } catch (error) {
+      console.error('Microphone permission denied:', error);
+      setMicPermission('denied');
+    }
+  };
+  
+  const requestMicrophonePermission = async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      setMicPermission('granted');
+      return true;
+    } catch (error) {
+      console.error('Failed to get microphone permission:', error);
+      setMicPermission('denied');
+      return false;
+    }
+  };
+  
+  const startCall = async () => {
+    if (!retellWebClient || isCallActive) return;
+    
+    // First ensure we have microphone permissions
+    if (micPermission !== 'granted') {
+      const permissionGranted = await requestMicrophonePermission();
+      if (!permissionGranted) {
+        alert('Microphone permission is required to start a call');
+        return;
+      }
+    }
+    
+    try {
+      // Reset event status but preserve graph visibility
+      // Reset the manual dismissal flag when starting a new call
+      setGraphsManuallyDismissed(false);
+      
+      // Ensure we have a valid token
+      if (!accessToken) {
+        const token = await generateAccessToken();
+        if (!token) {
+          throw new Error("Failed to generate a valid access token");
+        }
+      }
+      
+      console.log("Starting call with access token...");
+      await retellWebClient.startCall({
+        accessToken: accessToken,
+        sampleRate: 24000,
+        captureDeviceId: "default",
+        emitRawAudioSamples: false,
+      });
+      
+      setIsCallActive(true);
+    } catch (error) {
+      console.error("Failed to start call:", error);
+      setEventStatus(prev => ({ ...prev, error: error.message || "Failed to start call" }));
+    }
+  };
+  
+  const stopCall = () => {
+    if (retellWebClient && isCallActive) {
+      retellWebClient.stopCall();
+      setIsCallActive(false);
+    }
+  };
+  
+  // Function to check if token is expired (tokens are valid for 30 seconds)
+  const isTokenExpired = () => {
+    // If we don't have token info, consider it expired
+    if (!accessToken || !callInfo) return true;
+    
+    // Track when we received the token in our application
+    if (!callInfo._tokenReceivedTime) {
+      // If this is the first time checking, add a timestamp of when we received it
+      callInfo._tokenReceivedTime = Date.now();
+      setCallInfo({...callInfo}); // Update the state to save this timestamp
+      return false; // Token is fresh
+    }
+    
+    // Calculate how long ago we received the token
+    const tokenReceivedTime = callInfo._tokenReceivedTime;
+    const currentTime = Date.now();
+    const tokenAgeInSeconds = (currentTime - tokenReceivedTime) / 1000;
+    
+    // Token expires after 30 seconds, but we consider it expired at 25s
+    // to give us a buffer to generate a new one
+    return tokenAgeInSeconds > 25;
+  };
+  
+  // New function to handle loading completion and initialize Spline only once
+  const handleLoadingComplete = () => {
+    setLoadingComplete(true);
+    setSplineInitialized(true);
+  };
+
+  // Function to handle graph visualization based on keywords and agent speaking status
+  const handleGraphVisualizationSpeech = () => {
+    // Don't show graphs if they were manually dismissed
+    if (graphsManuallyDismissed) return;
+    
+    const hasGraphKeywords = checkForGraphKeywordsSpeech(transcript);
+    
+    // Only show graphs if they're not already showing and keywords are detected
+    if (hasGraphKeywords && !showGraphs) {
+      setShowGraphs(true);
+      
+      // Clear any existing interval
+      if (graphIntervalRef.current) {
+        clearInterval(graphIntervalRef.current);
+        graphIntervalRef.current = null;
+      }
+      
+      // Initial key press for 1 second
+      simulateKeyPress('l');
+      
+      // Set up interval for 1-second presses with 1-second pauses
+      graphIntervalRef.current = setInterval(() => {
+        simulateKeyPress('l');
+      }, 2000); // 2-second interval (1s press + 1s pause)
+    }
+    
+    // No automatic hiding of graphs - they'll only be dismissed by the button
+  };
+
+  // Function to release a key that might be continuously pressed
+  const releaseKey = (key) => {
+    try {
+      // Release key using SplineViewer reference
+      if (splineInstanceRef.current) {
+        splineInstanceRef.current.sendKeyUp(key);
+        console.log(`Released key: ${key}`);
+      }
+      
+      // Reset keyPressed state
+      keyPressedRef.current[key] = false;
+      
+      // Also trigger release on active element
+      if (document.activeElement) {
+        const upEvent = new KeyboardEvent('keyup', {
+          key: key,
+          code: `Key${key.toUpperCase()}`,
+          keyCode: key.charCodeAt(0),
+          which: key.charCodeAt(0),
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        });
+        document.activeElement.dispatchEvent(upEvent);
+      }
+      
+      // Remove active state from test button
+      const buttonSelector = key === 'u' ? '.test-btn:nth-child(1)' : 
+                         key === 'd' ? '.test-btn:nth-child(2)' : 
+                         key === 'l' ? '.test-btn:nth-child(3)' : 
+                         '.test-btn:nth-child(4)';
+      const button = document.querySelector(buttonSelector);
+      if (button) {
+        button.classList.remove('active-test-btn');
+      }
+    } catch (e) {
+      console.error(`Error releasing key ${key}:`, e);
+    }
+  };
+
+  // Extract potential title from transcript
+  const extractTitleFromTranscript = () => {
+    const text = eventStatus.transcript || transcript || '';
+    
+    // Try to find phrases like "here's a graph about X" or "data on X"
+    const titlePatterns = [
+      /graph (?:about|on|for|of) ([\w\s]+)/i,
+      /data (?:about|on|for|of) ([\w\s]+)/i,
+      /statistics (?:about|on|for|of) ([\w\s]+)/i,
+      /chart (?:about|on|for|of) ([\w\s]+)/i,
+      /metrics (?:about|on|for|of) ([\w\s]+)/i
+    ];
+    
+    for (const pattern of titlePatterns) {
+      const match = text.match(pattern);
+      if (match && match[1]) {
+        // Limit to 20 characters and capitalize
+        return match[1].trim().substring(0, 20).replace(/^\w/, c => c.toUpperCase());
+      }
+    }
+    
+    // Default titles based on graph type
+    return graphType === 'bar' ? 'Performance Metrics' : 'Trend Analysis';
+  };
+
+  // Render functions for different graph types
+  const renderGraph = () => {
+    const graphTitle = extractTitleFromTranscript();
+    
+    switch(graphType) {
+      case 'bar':
+  return (
+          <div className="graph-container">
+            <h3 className="graph-title">{graphTitle || "Quarterly Performance Analysis"}</h3>
+            <div className="neon-graph bar-graph">
+              <div className="y-axis">
+                <span>100%</span>
+                <span>75%</span>
+                <span>50%</span>
+                <span>25%</span>
+                <span>0%</span>
+              </div>
+              <div className="bar-container">
+                <div className="bar" style={{ height: '60%' }}>
+                  <div className="bar-glow"></div>
+                  <span className="bar-label">Q1</span>
+                  <span className="bar-value">60%</span>
+                </div>
+                <div className="bar" style={{ height: '80%' }}>
+                  <div className="bar-glow"></div>
+                  <span className="bar-label">Q2</span>
+                  <span className="bar-value">80%</span>
+                </div>
+                <div className="bar" style={{ height: '40%' }}>
+                  <div className="bar-glow"></div>
+                  <span className="bar-label">Q3</span>
+                  <span className="bar-value">40%</span>
+                </div>
+                <div className="bar" style={{ height: '90%' }}>
+                  <div className="bar-glow"></div>
+                  <span className="bar-label">Q4</span>
+                  <span className="bar-value">90%</span>
+                </div>
+                <div className="bar" style={{ height: '65%' }}>
+                  <div className="bar-glow"></div>
+                  <span className="bar-label">YTD</span>
+                  <span className="bar-value">65%</span>
+                </div>
+              </div>
+            </div>
+            <div className="x-axis-label">Quarterly Results</div>
+            <div className="graph-legend">
+              <div className="legend-item"><span className="legend-color bar-color"></span>Performance Metrics</div>
+            </div>
+          </div>
+        );
+      case 'line':
+        return (
+          <div className="graph-container">
+            <h3 className="graph-title">{graphTitle || "Performance Trend Analysis"}</h3>
+            <div className="neon-graph line-graph">
+              <div className="y-axis">
+                <span>High</span>
+                <span>Med</span>
+                <span>Low</span>
+              </div>
+              <svg viewBox="0 0 100 50" className="animated-line">
+                <defs>
+                  <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="#4facfe" />
+                    <stop offset="100%" stopColor="#00f2fe" />
+                  </linearGradient>
+                  <filter id="glow">
+                    <feGaussianBlur stdDeviation="2" result="blur" />
+                    <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                  </filter>
+                </defs>
+                <path d="M0,40 L20,30 L40,35 L60,15 L80,25 L100,10" stroke="url(#lineGradient)" strokeWidth="2" fill="none" filter="url(#glow)" />
+                <circle cx="0" cy="40" r="3" className="data-point pulse" />
+                <circle cx="20" cy="30" r="3" className="data-point pulse" />
+                <circle cx="40" cy="35" r="3" className="data-point pulse" />
+                <circle cx="60" cy="15" r="3" className="data-point pulse" />
+                <circle cx="80" cy="25" r="3" className="data-point pulse" />
+                <circle cx="100" cy="10" r="3" className="data-point pulse" />
+                
+                <text x="0" y="45" className="data-label">Jan</text>
+                <text x="20" y="35" className="data-label">Feb</text>
+                <text x="40" y="40" className="data-label">Mar</text>
+                <text x="60" y="20" className="data-label">Apr</text>
+                <text x="80" y="30" className="data-label">May</text>
+                <text x="100" y="15" className="data-label">Jun</text>
+              </svg>
+            </div>
+            <div className="x-axis-label">Time Period (Jan-Jun)</div>
+            <div className="graph-legend">
+              <div className="legend-item"><span className="legend-color line-color"></span>Trend Analysis</div>
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
+  useEffect(() => {
+    setTranscript(currentTranscript);
+  }, [currentTranscript]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Function to check for graph-related keywords in the transcript
+  const checkForGraphKeywordsSpeech = (text) => {
+    if (!text) return false;
+    const textLower = text.toLowerCase();
+    return graphKeywords.some(keyword => textLower.includes(keyword));
+  };
+
+  // Monitor for changes in transcript and agent speaking status
+  useEffect(() => {
+    handleGraphVisualizationSpeech();
+  }, [transcript, isAgentSpeaking]);
+
+  // Effect to make sure 'l' key is pressed and released at intervals while graphs are shown
+  useEffect(() => {
+    if (showGraphs) {
+      // Press 'l' key initially for 1 second and release
+      if (!graphIntervalRef.current) {
+        // Press the key
+        simulateKeyPress('l');
+        
+        // Set up interval to press every 2 seconds (1s press + 1s pause)
+        graphIntervalRef.current = setInterval(() => {
+          // Press the key for 1 second
+          simulateKeyPress('l');
+        }, 2000); // 2 second interval (1s press + 1s pause)
+      }
+    } else {
+      // Clear interval when graphs are hidden
+      if (graphIntervalRef.current) {
+        clearInterval(graphIntervalRef.current);
+        graphIntervalRef.current = null;
+        releaseKey('l');
+      }
+    }
+    
+    return () => {
+      if (graphIntervalRef.current) {
+        clearInterval(graphIntervalRef.current);
+        graphIntervalRef.current = null;
+        releaseKey('l');
+      }
+    };
+  }, [showGraphs]);
+
+  const handleStartListening = () => {
+    resetTranscript();
+    SpeechRecognition.startListening({ continuous: true });
+  };
+
+  const handleStopListening = () => {
+    SpeechRecognition.stopListening();
+  };
+
+  const toggleAgentSpeaking = () => {
+    setIsAgentSpeaking(!isAgentSpeaking);
+  };
+
+  const handleSendMessage = () => {
+    if (transcript.trim() === '') return;
+
+    const newMessage = {
+      text: transcript,
+      sender: 'user',
+      timestamp: new Date().toISOString()
+    };
+
+    setMessages([...messages, newMessage]);
+    resetTranscript();
+  };
+
+  const renderAgentResponse = () => {
+    // Array of funny, body-related responses
+    const bodyResponses = [
+      "I'm flexing my neural networks to process your request. Let me show you some data that'll get your heart pumping!",
+      "My digital synapses are firing at full capacity! Here's some visual brain food for you.",
+      "Hold on, just cracking my virtual knuckles before I dive into these statistics for you.",
+      "I'm putting my thinking cap on—literally, it's connected to my CPU cortex. Check out these insights!",
+      "Let me stretch my computational muscles and show you some eye-catching visualizations that'll make your pupils dilate!",
+      "My algorithmic reflexes are tingling! Here's some data that should stimulate your visual cortex.",
+      "Just catching my digital breath before showing you these numbers that'll make your jaw drop!",
+      "I'm digesting your request with my silicon stomach. These statistics should help get your mental juices flowing!"
+    ];
+    
+    // Select a random response
+    const randomResponse = bodyResponses[Math.floor(Math.random() * bodyResponses.length)];
+    
+    // Simulate agent responding
+    const agentMessage = {
+      text: randomResponse,
+      sender: 'agent',
+      timestamp: new Date().toISOString()
+    };
+
+    setTimeout(() => {
+      setMessages([...messages, agentMessage]);
+      setIsAgentSpeaking(true);
+      
+      // Simulate agent finishing speaking after 5 seconds
+      setTimeout(() => {
+        setIsAgentSpeaking(false);
+      }, 5000);
+    }, 1000);
+  };
+
+  // Effect to mark graphs as animated after they appear
+  useEffect(() => {
+    if (showGraphs && !graphsAnimated) {
+      // After animation duration, mark graphs as animated
+      const animationTimeout = setTimeout(() => {
+        setGraphsAnimated(true);
+      }, 1200); // Slightly longer than the animation duration
+      
+      return () => clearTimeout(animationTimeout);
+    } else if (!showGraphs && graphsAnimated) {
+      // Reset animation state when graphs are hidden
+      setGraphsAnimated(false);
+    }
+  }, [showGraphs, graphsAnimated]);
+  
+  // Effect to handle spline animation repositioning when tab changes
+  useEffect(() => {
+    // Force a reflow to ensure the animation transitions smoothly
+    document.body.classList.remove('tab-transition');
+    void document.body.offsetWidth; // Trigger reflow
+    document.body.classList.add('tab-transition');
+    
+    // Set a title based on the active tab
+    document.title = `AI Assistant - ${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}`;
+  }, [activeTab]);
+
+  // Initialize face detection
+  useEffect(() => {
+    if (faceDetectionEnabled && !detectorRef.current) {
+      const initializeDetector = async () => {
+        // Initialize with options
+        const detector = new FaceDirectionDetector({
+          showMesh: false,
+          showTagNumbers: false,
+          showDirection: false,
+          drawDelay: 100
+        });
+        
+        await detector.initialize();
+        detectorRef.current = detector;
+      };
+
+      initializeDetector();
+    }
+
+    // Cleanup on unmount or when disabled
+    return () => {
+      if (detectorRef.current) {
+        detectorRef.current.stop();
+      }
+    };
+  }, [faceDetectionEnabled]);
+
+  // Start face detection when webcam and canvas are available
+  useEffect(() => {
+    const startFaceDetection = async () => {
+      if (
+        faceDetectionEnabled &&
+        detectorRef.current &&
+        webcamRef.current &&
+        canvasRef.current &&
+        webcamRef.current.video?.readyState === 4
+      ) {
+        await detectorRef.current.start(
+          webcamRef.current.video,
+          canvasRef.current,
+          (data) => {
+            if (data && data.keypoints && data.keypoints[1]) {
+              // Update face position based on nose tip
+              const noseTip = data.keypoints[1];
+              
+              // Determine face direction
+              let direction = null;
+              if (data.turn > 15) direction = 'right';
+              else if (data.turn < -15) direction = 'left';
+              else if (data.yaw > 15) direction = 'down';
+              else if (data.yaw < -15) direction = 'up';
+              
+              setFacePosition({
+                x: Math.round(noseTip.x),
+                y: Math.round(noseTip.y),
+                direction
+              });
+              
+              // Trigger corresponding key press based on face direction
+              if (direction === 'up') simulateKeyPress('u');
+              else if (direction === 'down') simulateKeyPress('d');
+              else if (direction === 'left') simulateKeyPress('l');
+              else if (direction === 'right') simulateKeyPress('r');
+            }
+          }
+        );
+        setFaceDetectionLoaded(true);
+      }
+    };
+
+    if (faceDetectionEnabled && webcamRef.current?.video) {
+      startFaceDetection();
+    }
+    
+    // Cleanup
+    return () => {
+      if (detectorRef.current) {
+        detectorRef.current.stop();
+      }
+    };
+  }, [faceDetectionEnabled, webcamRef.current, canvasRef.current]);
+
+  return (
+    <div className={`App ${showGraphs ? 'graphs-active' : ''}`}>
+      {!loadingComplete ? (
+        <SplineLoader onLoadingComplete={handleLoadingComplete} />
+      ) : (
+        <>
+          {/* Main Spline Animation filling the entire viewport */}
+          <div className="spline-container">
+            {/* Use splineInitialized to ensure it's only mounted once */}
+            {splineInitialized && (
+              <SplineViewer 
+                ref={splineInstanceRef}
+                url="https://prod.spline.design/MLpQD4kA7Miyykt9/scene.splinecode"
+                options={{
+                  hint: true,
+                  'loading-anim-type': 'spinner-small-dark'
+                }}
+                persistOnUpdate={true}
+              />
+            )}
+            
+            {/* Graph visualization overlay when detected in transcript */}
+            {showGraphs && (
+              <div className={`graph-overlay ${showGraphs ? 'visible' : ''}`}>
+          <button 
+                  className="dismiss-graphs-btn"
+                  onClick={() => {
+                    setShowGraphs(false);
+                    // Mark graphs as manually dismissed to prevent auto-showing
+                    setGraphsManuallyDismissed(true);
+                    // Release the L key when graphs are dismissed
+                    releaseKey('l');
+                    // Clear any existing interval
+                    if (graphIntervalRef.current) {
+                      clearInterval(graphIntervalRef.current);
+                      graphIntervalRef.current = null;
+                    }
+                  }}
+                >
+                  <span className="btn-icon">×</span>
+                  <span className="btn-text">Hide Graphs</span>
+          </button>
+                
+                {/* Always render both graphs in a column when visible */}
+                <div className={`graph-container ${graphsAnimated ? 'animated' : ''}`}>
+                  <h3 className="graph-title">{extractTitleFromTranscript()}</h3>
+                  <div className="floating-data">+65%</div>
+                  <div className="neon-graph bar-graph">
+                    <div className="y-axis">
+                      <span>100%</span>
+                      <span>75%</span>
+                      <span>50%</span>
+                      <span>25%</span>
+                      <span>0%</span>
+                    </div>
+                    <div className="bar-container">
+                      <div className="grid-lines">
+                        <div className="grid-line"></div>
+                        <div className="grid-line"></div>
+                        <div className="grid-line"></div>
+                        <div className="grid-line"></div>
+                      </div>
+                      <div className="bar" style={{ height: '60%' }}><span className="bar-label">Q1</span></div>
+                      <div className="bar" style={{ height: '80%' }}><span className="bar-label">Q2</span></div>
+                      <div className="bar" style={{ height: '40%' }}><span className="bar-label">Q3</span></div>
+                      <div className="bar" style={{ height: '90%' }}><span className="bar-label">Q4</span></div>
+                      <div className="bar" style={{ height: '65%' }}><span className="bar-label">YTD</span></div>
+                    </div>
+                  </div>
+                  <div className="x-axis-label">Quarterly Results</div>
+                </div>
+                
+                <div className={`graph-container ${graphsAnimated ? 'animated' : ''}`}>
+                  <h3 className="graph-title">Trend Analysis</h3>
+                  <div className="floating-data trend-up">↗ 32%</div>
+                  <div className="neon-graph line-graph">
+                    <div className="y-axis">
+                      <span>High</span>
+                      <span>Med</span>
+                      <span>Low</span>
+                    </div>
+                    <svg viewBox="0 0 100 50" preserveAspectRatio="none">
+                      <defs>
+                        <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="#00ffff" stopOpacity="0.7" />
+                          <stop offset="100%" stopColor="#0088ff" stopOpacity="0.9" />
+                        </linearGradient>
+                      </defs>
+                      <g className="grid-lines">
+                        <line x1="0" y1="10" x2="100" y2="10" className="grid-line" />
+                        <line x1="0" y1="25" x2="100" y2="25" className="grid-line" />
+                        <line x1="0" y1="40" x2="100" y2="40" className="grid-line" />
+                      </g>
+                      <path d="M10,40 L25,30 L40,35 L60,15 L75,25 L90,10" stroke="url(#lineGradient)" />
+                      <circle cx="10" cy="40" r="2" className="data-point" />
+                      <circle cx="25" cy="30" r="2" className="data-point" />
+                      <circle cx="40" cy="35" r="2" className="data-point" />
+                      <circle cx="60" cy="15" r="2" className="data-point" />
+                      <circle cx="75" cy="25" r="2" className="data-point" />
+                      <circle cx="90" cy="10" r="2" className="data-point" />
+                    </svg>
+                  </div>
+                  <div className="x-axis-label">Time Period (Jan-Jun)</div>
+                </div>
+              </div>
+        )}
+      </div>
+      
+      {/* Face detection components */}
+      {faceDetectionEnabled && (
+        <div style={{ position: "absolute", left: 0, top: 0, opacity: 0.2 }} className="face-detection-container">
+          <Webcam
+            ref={webcamRef}
+            width={320}
+            height={240}
+            videoConstraints={{
+              width: 320,
+              height: 240,
+              facingMode: "user"
+            }}
+            style={{ position: "absolute", zIndex: 9 }}
+          />
+          <canvas
+            ref={canvasRef}
+            width={320}
+            height={240}
+            style={{ position: "absolute", zIndex: 10 }}
+          />
+          {faceDetectionLoaded && (
+            <div style={{ 
+              position: "absolute", 
+              top: "250px", 
+              left: "10px",
+              fontSize: "14px",
+              fontFamily: "monospace",
+              color: "white",
+              background: "rgba(0,0,0,0.5)",
+              padding: "5px",
+              borderRadius: "4px",
+              zIndex: 11
+            }}>
+              Face: {facePosition.x},{facePosition.y} {facePosition.direction && `(${facePosition.direction})`}
+            </div>
+          )}
+        </div>
+      )}
+          
+        {/* Minimal UI sidebar */}
+        <div className={`sidebar ${showUI ? 'open' : 'closed'} ${showGraphs ? 'fade-out' : ''}`} data-active-tab={activeTab}>
+          <div className="toggle-ui" onClick={() => setShowUI(!showUI)}>
+            {showUI ? '×' : '≡'}
+          </div>
+          
+          <div className="sidebar-content">
+            <h2>
+              <span className="ai-voice-text">AI Assistant</span>
+            </h2>
+            
+            <div className="tabs-container">
+              <button 
+                className={`tab-btn ${activeTab === 'voice' ? 'active' : ''}`}
+                onClick={() => setActiveTab('voice')}
+              >
+                Voice
+              </button>
+              <button 
+                className={`tab-btn ${activeTab === 'finance' ? 'active' : ''}`}
+                onClick={() => setActiveTab('finance')}
+              >
+                Finance
+              </button>
+              <button 
+                className={`tab-btn ${activeTab === 'connect' ? 'active' : ''}`}
+                onClick={() => setActiveTab('connect')}
+              >
+                Connect
+              </button>
+            </div>
+            
+            {activeTab === 'voice' && (
+              <>
+                <div className="status-indicator">
+                  <div className={`status-dot ${isCallActive || accessToken ? 'active' : 'inactive'}`}></div>
+                  <span>{isCallActive || accessToken ? 'Connected' : 'Disconnected'}</span>
+                </div>
+                
+                {micPermission !== 'granted' && (
+                  <button 
+                    onClick={requestMicrophonePermission}
+                    className="btn-secondary btn-small"
+                  >
+                    Enable Mic
+                  </button>
+                )}
+                
+                <div className="control-buttons">
+                  <button 
+                    onClick={!accessToken || isTokenExpired() ? generateAccessToken : startCall} 
+                    disabled={isGeneratingToken || (isCallActive && accessToken)}
+                    className="btn-primary"
+                  >
+                    {!accessToken || isTokenExpired() 
+                      ? "Connect" 
+                      : isGeneratingToken 
+                        ? "Loading..." 
+                        : "Start Call"}
+                  </button>
+                  
+                  {isCallActive && (
+            <button 
+              onClick={stopCall} 
+                        className="btn-danger"
+                      >
+                        End Call
+            </button>
+                  )}
+                </div>
+                
+                {/* Face detection toggle */}
+                <div className="face-detection-controls">
+                  <button 
+                    onClick={() => setFaceDetectionEnabled(!faceDetectionEnabled)}
+                    className={`btn-secondary ${faceDetectionEnabled ? 'active' : ''}`}
+                  >
+                    {faceDetectionEnabled ? 'Disable Face Control' : 'Enable Face Control'}
+                  </button>
+                  {faceDetectionEnabled && faceDetectionLoaded && (
+                    <div className="face-status">
+                      <span>Face direction: </span>
+                      <strong>{facePosition.direction || 'center'}</strong>
+                    </div>
+                  )}
+                </div>
+                
+                {eventStatus.error && (
+                  <div className="error-badge">
+                    Error: {eventStatus.error}
+          </div>
+        )}
+                
+                {/* Minimalistic talking indicator */}
+                {isCallActive && (
+                  <div className={`talking-indicator ${showGraphs ? 'fade-out' : ''}`}>
+                    {eventStatus.agentStartTalking && !eventStatus.agentStopTalking ? (
+                      <div className="wave-animation">
+                        <div className="wave"></div>
+                        <div className="wave"></div>
+                        <div className="wave"></div>
+                        <div className="wave"></div>
+              </div>
+                    ) : null}
+          </div>
+                )}
+                
+                {/* Transcript in a minimal scrollable area */}
+          {eventStatus.transcript && (
+                      <div className={`mini-transcript ${showGraphs ? 'fade-out' : ''}`}>
+              <p style={{ whiteSpace: 'pre-line' }}>{eventStatus.transcript}</p>
+            </div>
+          )}
+              </>
+            )}
+
+            {activeTab === 'finance' && (
+              <div className="finance-dashboard">
+                <h3 className="section-title">Finance Dashboard</h3>
+                <div className="dashboard-stats">
+                  <div className="stat-card">
+                    <div className="stat-title">Revenue</div>
+                    <div className="stat-value">$567,890</div>
+                    <div className="stat-change positive">+12.4%</div>
+          </div>
+                  <div className="stat-card">
+                    <div className="stat-title">Profit</div>
+                    <div className="stat-value">$123,456</div>
+                    <div className="stat-change positive">+8.7%</div>
+          </div>
+                  <div className="stat-card">
+                    <div className="stat-title">Expenses</div>
+                    <div className="stat-value">$324,567</div>
+                    <div className="stat-change negative">+5.2%</div>
+                  </div>
+                  <div className="stat-card">
+                    <div className="stat-title">Assets</div>
+                    <div className="stat-value">$789,012</div>
+                    <div className="stat-change positive">+3.1%</div>
+                  </div>
+                </div>
+                
+                <div className="chart-section">
+                  <h4>Revenue Trends</h4>
+                  <div className="finance-chart">
+                    <div className="chart-placeholder line-chart">
+                      <div className="y-axis">
+                        <span>$600K</span>
+                        <span>$400K</span>
+                        <span>$200K</span>
+                        <span>$0</span>
+                      </div>
+                      <svg viewBox="0 0 100 50" className="finance-line">
+                        <defs>
+                          <linearGradient id="revenueGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stopColor="#00a8ff" />
+                            <stop offset="100%" stopColor="#0097e6" />
+                          </linearGradient>
+                        </defs>
+                        <path d="M0,35 L10,32 L20,28 L30,30 L40,25 L50,20 L60,18 L70,15 L80,10 L90,5 L100,8" 
+                              stroke="url(#revenueGradient)" 
+                              strokeWidth="2" 
+                              fill="none" 
+                              className="animated-path" />
+                        {[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((x, i) => (
+                          <circle 
+                            key={i} 
+                            cx={x} 
+                            cy={[35, 32, 28, 30, 25, 20, 18, 15, 10, 5, 8][i]} 
+                            r="1.5" 
+                            className="chart-point" 
+                          />
+                        ))}
+                      </svg>
+                      <div className="x-axis">
+                        <span>Jan</span>
+                        <span>Apr</span>
+                        <span>Jul</span>
+                        <span>Oct</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="chart-section">
+                  <h4>Expense Breakdown</h4>
+                  <div className="finance-chart">
+                    <div className="chart-placeholder pie-chart">
+                      <div className="pie-segments">
+                        <div className="pie-segment" style={{transform: 'rotate(0deg)', clipPath: 'polygon(50% 50%, 50% 0%, 100% 0%, 100% 50%)', background: '#00a8ff'}}></div>
+                        <div className="pie-segment" style={{transform: 'rotate(90deg)', clipPath: 'polygon(50% 50%, 50% 0%, 100% 0%, 100% 50%)', background: '#0097e6'}}></div>
+                        <div className="pie-segment" style={{transform: 'rotate(180deg)', clipPath: 'polygon(50% 50%, 50% 0%, 100% 0%, 100% 50%)', background: '#00f2fe'}}></div>
+                        <div className="pie-segment" style={{transform: 'rotate(270deg)', clipPath: 'polygon(50% 50%, 50% 0%, 80% 0%, 100% 30%)', background: '#5352ed'}}></div>
+                      </div>
+                    </div>
+                    <div className="pie-legend">
+                      <div className="legend-item"><span className="legend-color" style={{background: '#00a8ff'}}></span>Payroll (45%)</div>
+                      <div className="legend-item"><span className="legend-color" style={{background: '#0097e6'}}></span>Operations (25%)</div>
+                      <div className="legend-item"><span className="legend-color" style={{background: '#00f2fe'}}></span>Marketing (20%)</div>
+                      <div className="legend-item"><span className="legend-color" style={{background: '#5352ed'}}></span>Other (10%)</div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="chart-section">
+                  <h4>Tax Breakdown by Category</h4>
+                  <div className="finance-chart">
+                    <div className="chart-placeholder line-chart">
+                      <div className="y-axis">
+                        <span>$50K</span>
+                        <span>$40K</span>
+                        <span>$30K</span>
+                        <span>$20K</span>
+                        <span>$10K</span>
+                        <span>$0</span>
+                      </div>
+                      <svg viewBox="0 0 100 50" className="finance-line">
+                        <defs>
+                          <linearGradient id="taxGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stopColor="#5352ed" />
+                            <stop offset="100%" stopColor="#00f2fe" />
+                          </linearGradient>
+                        </defs>
+                        <path d="M0,10 L20,15 L40,25 L60,20 L80,30 L100,15" 
+                              stroke="url(#taxGradient)" 
+                              strokeWidth="2" 
+                              fill="none" 
+                              className="animated-path" />
+                        {[0, 20, 40, 60, 80, 100].map((x, i) => (
+                          <circle 
+                            key={i} 
+                            cx={x} 
+                            cy={[10, 15, 25, 20, 30, 15][i]} 
+                            r="1.5" 
+                            className="chart-point" 
+                          />
+                        ))}
+                      </svg>
+                      <div className="x-axis">
+                        <span>Income</span>
+                        <span>Property</span>
+                        <span>Sales</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="actions-panel">
+                  <h4>Recommendations</h4>
+                  <div className="action-items">
+                    <div className="action-item">
+                      <div className="action-icon savings"></div>
+                      <div className="action-content">
+                        <div className="action-title">Reduce Cloud Costs</div>
+                        <div className="action-desc">Switch to reserved instances to save 30% on cloud infrastructure.</div>
+                      </div>
+                    </div>
+                    <div className="action-item">
+                      <div className="action-icon investment"></div>
+                      <div className="action-content">
+                        <div className="action-title">Investment Opportunity</div>
+                        <div className="action-desc">New tech sector ETF with 12% projected annual return.</div>
+                      </div>
+                    </div>
+                    <div className="action-item">
+                      <div className="action-icon savings"></div>
+                      <div className="action-content">
+                        <div className="action-title">Tax Optimization</div>
+                        <div className="action-desc">Restructure company assets to qualify for R&D tax credits.</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {activeTab === 'connect' && (
+              <div className="connect-tab">
+                <h3 className="section-title">Connect with Industry Experts</h3>
+                
+                <div className="search-container">
+                  <input 
+                    type="text" 
+                    placeholder="Search for industry experts, companies, or industries..." 
+                    className="search-input"
+                  />
+                  <button className="search-btn"><span>🔍</span></button>
+                  <div className="search-filters">
+                    <button className="filter-btn active">All</button>
+                    <button className="filter-btn">Finance</button>
+                    <button className="filter-btn">Tech</button>
+                    <button className="filter-btn">Consulting</button>
+                    <button className="filter-btn">Investment</button>
+                  </div>
+                </div>
+                
+                <div className="network-map-container">
+                  <h4>Your Professional Network</h4>
+                  <div className="network-stats">
+                    <div className="network-stat">
+                      <div className="stat-value">156</div>
+                      <div className="stat-label">Connections</div>
+                    </div>
+                    <div className="network-stat">
+                      <div className="stat-value">47</div>
+                      <div className="stat-label">Pending</div>
+                    </div>
+                    <div className="network-stat">
+                      <div className="stat-value">832</div>
+                      <div className="stat-label">Suggestions</div>
+                    </div>
+                  </div>
+                  <div className="network-map">
+                    <div className="map-background">
+                      <div className="map-node you" style={{ left: '50%', top: '50%' }}>
+                        <div className="node-dot"></div>
+                        <div className="node-pulse"></div>
+                        <div className="node-label">You</div>
+                      </div>
+                      <div className="map-node connection" style={{ left: '30%', top: '35%' }}>
+                        <div className="node-dot"></div>
+                        <div className="node-label">Finance</div>
+                      </div>
+                      <div className="map-node connection" style={{ left: '65%', top: '35%' }}>
+                        <div className="node-dot"></div>
+                        <div className="node-label">Tech</div>
+                      </div>
+                      <div className="map-node connection" style={{ left: '40%', top: '65%' }}>
+                        <div className="node-dot"></div>
+                        <div className="node-label">Marketing</div>
+                      </div>
+                      <div className="map-node connection" style={{ left: '70%', top: '60%' }}>
+                        <div className="node-dot"></div>
+                        <div className="node-label">Consulting</div>
+                      </div>
+                      <div className="map-node suggestion" style={{ left: '25%', top: '60%' }}>
+                        <div className="node-dot"></div>
+                        <div className="node-label">Manufacturing</div>
+                      </div>
+                      <div className="map-node suggestion" style={{ left: '80%', top: '25%' }}>
+                        <div className="node-dot"></div>
+                        <div className="node-label">Health</div>
+                      </div>
+                      <div className="map-connection" style={{ width: '20%', left: '40%', top: '43%', transform: 'rotate(-15deg)' }}></div>
+                      <div className="map-connection" style={{ width: '15%', left: '55%', top: '43%', transform: 'rotate(15deg)' }}></div>
+                      <div className="map-connection" style={{ width: '15%', left: '45%', top: '57%', transform: 'rotate(45deg)' }}></div>
+                      <div className="map-connection" style={{ width: '20%', left: '60%', top: '55%', transform: 'rotate(10deg)' }}></div>
+                      <div className="map-connection suggestion" style={{ width: '28%', left: '28%', top: '55%', transform: 'rotate(-5deg)' }}></div>
+                      <div className="map-connection suggestion" style={{ width: '35%', left: '60%', top: '37%', transform: 'rotate(-15deg)' }}></div>
+                    </div>
+                    <div className="map-overlay">
+                      <div className="map-legend">
+                        <div className="legend-item"><span className="legend-dot connection"></span>Connected</div>
+                        <div className="legend-item"><span className="legend-dot suggestion"></span>Suggested</div>
+                        <div className="legend-item"><span className="legend-dot you"></span>You</div>
+                      </div>
+                      <div className="map-zoom-controls">
+                        <button className="zoom-btn">+</button>
+                        <button className="zoom-btn">-</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="recommendation-section">
+                  <h4>Top Recommendations for You</h4>
+                  <div className="recommendation-tabs">
+                    <button className="rec-tab active">Industry Leaders</button>
+                    <button className="rec-tab">2nd Connections</button>
+                    <button className="rec-tab">Similar Experience</button>
+                  </div>
+                  <div className="connections-list">
+                    <div className="connection-card premium">
+                      <div className="connection-avatar" style={{backgroundColor: '#00a8ff'}}>JD</div>
+                      <div className="connection-details">
+                        <div className="connection-name">Jane Doe <span className="premium-badge">★</span></div>
+                        <div className="connection-title">Investment Director at Global Finance</div>
+                        <div className="connection-stats">
+                          <span className="connection-stat">94% match</span>
+                          <span className="connection-stat">15 yrs exp</span>
+                          <span className="connection-stat">Industry Leader</span>
+                        </div>
+                        <div className="connection-mutual">
+                          <span className="mutual-icon">👥</span> 3 mutual connections
+                        </div>
+                      </div>
+                      <button className="connect-btn premium-btn">Connect</button>
+                    </div>
+                    
+                    <div className="connection-card">
+                      <div className="connection-avatar" style={{backgroundColor: '#0097e6'}}>JS</div>
+                      <div className="connection-details">
+                        <div className="connection-name">John Smith</div>
+                        <div className="connection-title">Financial Advisor, Morgan Stanley</div>
+                        <div className="connection-stats">
+                          <span className="connection-stat">87% match</span>
+                          <span className="connection-stat">8 yrs exp</span>
+                        </div>
+                        <div className="connection-mutual">
+                          <span className="mutual-icon">👥</span> 1 mutual connection
+                        </div>
+                      </div>
+                      <button className="connect-btn">Connect</button>
+                    </div>
+                    
+                    <div className="connection-card">
+                      <div className="connection-avatar" style={{backgroundColor: '#00f2fe'}}>AT</div>
+                      <div className="connection-details">
+                        <div className="connection-name">Amy Thompson</div>
+                        <div className="connection-title">Tax Consultant, Deloitte</div>
+                        <div className="connection-stats">
+                          <span className="connection-stat">82% match</span>
+                          <span className="connection-stat">12 yrs exp</span>
+                        </div>
+                        <div className="connection-mutual">
+                          <span className="mutual-icon">👥</span> 5 mutual connections
+                        </div>
+                      </div>
+                      <button className="connect-btn">Connect</button>
+                    </div>
+                  </div>
+                  
+                  <div className="see-more-container">
+                    <button className="see-more-btn">See More Recommendations</button>
+                  </div>
+                </div>
+                
+                <div className="connect-sections">
+                  <div className="connect-section">
+                    <h4>Industry Events</h4>
+                    <div className="events-list">
+                      <div className="event-card">
+                        <div className="event-date">
+                          <div className="event-month">MAY</div>
+                          <div className="event-day">15</div>
+                        </div>
+                        <div className="event-details">
+                          <div className="event-title">Financial Innovation Summit</div>
+                          <div className="event-location">New York, NY</div>
+                          <div className="event-attendees">34 connections attending</div>
+                        </div>
+                        <button className="event-btn">RSVP</button>
+                      </div>
+                      <div className="event-card">
+                        <div className="event-date">
+                          <div className="event-month">JUN</div>
+                          <div className="event-day">22</div>
+                        </div>
+                        <div className="event-details">
+                          <div className="event-title">Tech Investment Conference</div>
+                          <div className="event-location">San Francisco, CA</div>
+                          <div className="event-attendees">12 connections attending</div>
+                        </div>
+                        <button className="event-btn">RSVP</button>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="connect-section">
+                    <h4>Companies to Follow</h4>
+                    <div className="companies-list">
+                      <div className="company-card">
+                        <div className="company-logo" style={{backgroundColor: '#5352ed'}}>VC</div>
+                        <div className="company-details">
+                          <div className="company-name">Venture Capital Partners</div>
+                          <div className="company-stats">
+                            <span className="company-stat">Financial Services</span>
+                            <span className="company-stat">1,200+ employees</span>
+                          </div>
+                        </div>
+                        <button className="follow-btn">Follow</button>
+                      </div>
+                      <div className="company-card">
+                        <div className="company-logo" style={{backgroundColor: '#ff6b6b'}}>TB</div>
+                        <div className="company-details">
+                          <div className="company-name">Tech Builders Inc.</div>
+                          <div className="company-stats">
+                            <span className="company-stat">Information Technology</span>
+                            <span className="company-stat">5,000+ employees</span>
+                          </div>
+                        </div>
+                        <button className="follow-btn">Follow</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="message-compose">
+                  <h4>Send Message</h4>
+                  <div className="message-recipients">
+                    <div className="recipient-tag">Jane Doe <span className="remove-recipient">×</span></div>
+                    <input type="text" placeholder="Add recipients..." className="recipient-input"/>
+                  </div>
+                  <textarea 
+                    placeholder="Write your message here..." 
+                    className="message-input"
+                    rows={6}
+                  ></textarea>
+                  <div className="message-actions">
+                    <div className="message-templates">
+                      <button className="template-btn">Intro Template</button>
+                      <button className="template-btn">Advisor Request</button>
+                      <button className="template-btn">Investment Pitch</button>
+                      <button className="template-btn">Job Inquiry</button>
+                    </div>
+                    <div className="send-actions">
+                      <button className="attachment-btn">📎</button>
+                      <button className="btn-secondary">Schedule</button>
+                      <button className="btn-primary">Send</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  )}
+</div>
+
+export default App;

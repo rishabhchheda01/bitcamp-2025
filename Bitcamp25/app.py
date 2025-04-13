@@ -10,7 +10,7 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 # Retell API key - in production, store this in environment variables
-RETELL_API_KEY = "key_c658f6ca7a8848afb60a7895641f"
+RETELL_API_KEY = "key_8b4cb3a3d82ca7bb3a100e558ce8"
 
 # Initialize the Retell client
 retell_client = Retell(api_key=RETELL_API_KEY)
