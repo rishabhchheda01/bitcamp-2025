@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Retell API key 
-RETELL_API_KEY = os.getenv("NESSIE_API_KEY")
+RETELL_API_KEY = "key_8b4cb3a3d82ca7bb3a100e558ce8"
 
 # Initialize the Retell client
 retell_client = Retell(api_key=RETELL_API_KEY)
