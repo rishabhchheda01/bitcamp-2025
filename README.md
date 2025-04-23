@@ -1,2 +1,3 @@
 # bitcamp-2025
-Bitcamp Project
+Devpost Link: https://devpost.com/software/voice-agent-for-finance
+Website Link: financewithnova.tech
