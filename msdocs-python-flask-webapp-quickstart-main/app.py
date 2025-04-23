@@ -8,8 +8,8 @@ from retell import Retell
 app = Flask(__name__)
 CORS(app)
 
-# Retell API key - in production, store this in environment variables
-RETELL_API_KEY = "key_8b4cb3a3d82ca7bb3a100e558ce8"
+# Retell API key 
+RETELL_API_KEY = os.getenv("NESSIE_API_KEY")
 
 # Initialize the Retell client
 retell_client = Retell(api_key=RETELL_API_KEY)
@@ -89,7 +89,7 @@ def nessie_request(method, endpoint, body=None, params=None):
 
 
 # =============================================
-# CUSTOMER MANAGEMENT ENDPOINTS -- Rishabh
+# CUSTOMER MANAGEMENT ENDPOINTS -
 # =============================================
 
 @app.route('/api/customers', methods=['GET', 'POST'])
@@ -604,7 +604,7 @@ def get_account_transactions():
 
 
 # =============================================
-# retell connector for aadesh
+# retell connector
 # =============================================
 
 @app.route('/api/generate-token', methods=['POST'])
